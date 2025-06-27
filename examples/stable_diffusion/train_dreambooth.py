@@ -37,6 +37,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
+import matplotlib.pyplot as plt
 
 from peft import LoHaConfig, LoKrConfig, LoraConfig, get_peft_model
 
@@ -778,6 +779,13 @@ def main(args):
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO,
     )
+
+    # Add file handler to save logs to a file
+    log_file = os.path.join(args.output_dir, args.logging_dir, "train.log")
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
+    logging.getLogger().addHandler(file_handler)
+
     logger.info(accelerator.state, main_process_only=False)
     if accelerator.is_local_main_process:
         datasets.utils.logging.set_verbosity_warning()
@@ -1049,6 +1057,8 @@ def main(args):
         first_epoch = resume_global_step // num_update_steps_per_epoch
         resume_step = resume_global_step % num_update_steps_per_epoch
 
+    loss_log = []
+
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
@@ -1143,6 +1153,8 @@ def main(args):
                 logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
                 progress_bar.set_postfix(**logs)
                 accelerator.log(logs, step=global_step)
+
+                loss_log.append(logs["loss"])
 
                 if (
                     args.validation_prompt is not None
@@ -1252,6 +1264,18 @@ def main(args):
             )
 
     accelerator.end_training()
+
+    with open(os.path.join(args.output_dir, args.logging_dir, "loss_log.txt"), "w") as f:
+        f.write(",".join([str(loss) for loss in loss_log]))
+
+    # make graph of loss and save it
+    plt.figure(figsize=(10, 5))
+    plt.plot(loss_log, label="Loss")
+    plt.xlabel("Steps")
+    plt.ylabel("Loss")
+    plt.title("Training Loss")
+    plt.legend()
+    plt.savefig(os.path.join(args.output_dir, args.logging_dir, "loss_plot.png"))
 
 
 if __name__ == "__main__":
