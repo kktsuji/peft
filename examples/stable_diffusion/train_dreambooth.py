@@ -1332,7 +1332,7 @@ def main(args):
 
     accelerator.end_training()
 
-    with open(os.path.join(args.output_dir, args.logging_dir, "loss_log.txt"), "w") as f:
+    with open(os.path.join(args.output_dir, args.logging_dir, "loss_log.txt"), mode="w", encoding="utf-8") as f:
         f.write(",".join([str(loss) for loss in loss_log]))
 
     # make graph of loss and save it
