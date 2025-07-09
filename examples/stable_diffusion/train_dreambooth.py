@@ -297,6 +297,23 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
+        "--save_every_n_epochs",
+        type=int,
+        default=None,
+        help="Save model every N epochs. If None, only saves at the end of training.",
+    )
+    parser.add_argument(
+        "--save_best_model",
+        action="store_true",
+        help="Save the model whenever loss improves significantly.",
+    )
+    parser.add_argument(
+        "--loss_improvement_threshold",
+        type=float,
+        default=0.01,
+        help="Loss improvement threshold for saving best model.",
+    )
+    parser.add_argument(
         "--resume_from_checkpoint",
         type=str,
         default=None,
@@ -1058,6 +1075,8 @@ def main(args):
         resume_step = resume_global_step % num_update_steps_per_epoch
 
     loss_log = []
+    best_loss = float("inf")
+    save_threshold = args.loss_improvement_threshold  # Use command-line argument
 
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
@@ -1156,6 +1175,26 @@ def main(args):
 
                 loss_log.append(logs["loss"])
 
+                # Save model when loss improves significantly (if enabled)
+                if args.save_best_model:
+                    current_loss = logs["loss"]
+                    if current_loss < best_loss - save_threshold:
+                        best_loss = current_loss
+                        if accelerator.is_main_process:
+                            best_model_path = os.path.join(args.output_dir, f"best-model-step-{global_step}")
+                            if args.adapter != "full":
+                                unwarpped_unet = accelerator.unwrap_model(unet)
+                                unwarpped_unet.save_pretrained(
+                                    os.path.join(best_model_path, "unet"), state_dict=accelerator.get_state_dict(unet)
+                                )
+                                if args.train_text_encoder:
+                                    unwarpped_text_encoder = accelerator.unwrap_model(text_encoder)
+                                    unwarpped_text_encoder.save_pretrained(
+                                        os.path.join(best_model_path, "text_encoder"),
+                                        state_dict=accelerator.get_state_dict(text_encoder),
+                                    )
+                            logger.info(f"Saved best model (loss: {best_loss:.4f}) to {best_model_path}")
+
                 if (
                     args.validation_prompt is not None
                     and (step + num_update_steps_per_epoch * epoch) % args.validation_steps == 0
@@ -1232,18 +1271,46 @@ def main(args):
             f"CPU Total Peak Memory consumed during the train (max): {tracemalloc.cpu_peaked + b2mb(tracemalloc.cpu_begin)}"
         )
 
+        # Save model at the end of each epoch (if enabled)
+        if args.save_every_n_epochs is not None and (epoch + 1) % args.save_every_n_epochs == 0:
+            if accelerator.is_main_process:
+                epoch_save_path = os.path.join(args.output_dir, f"epoch-{epoch}")
+                if args.adapter != "full":
+                    # Save adapter weights
+                    unwarpped_unet = accelerator.unwrap_model(unet)
+                    unwarpped_unet.save_pretrained(
+                        os.path.join(epoch_save_path, "unet"), state_dict=accelerator.get_state_dict(unet)
+                    )
+                    if args.train_text_encoder:
+                        unwarpped_text_encoder = accelerator.unwrap_model(text_encoder)
+                        unwarpped_text_encoder.save_pretrained(
+                            os.path.join(epoch_save_path, "text_encoder"),
+                            state_dict=accelerator.get_state_dict(text_encoder),
+                        )
+                else:
+                    # Save full pipeline
+                    pipeline = DiffusionPipeline.from_pretrained(
+                        args.pretrained_model_name_or_path,
+                        unet=accelerator.unwrap_model(unet),
+                        text_encoder=accelerator.unwrap_model(text_encoder),
+                        revision=args.revision,
+                    )
+                    pipeline.save_pretrained(epoch_save_path)
+                logger.info(f"Saved model at epoch {epoch} to {epoch_save_path}")
+
     # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
+        output_dir = os.path.join(args.output_dir, "final_model")
         if args.adapter != "full":
             unwarpped_unet = accelerator.unwrap_model(unet)
             unwarpped_unet.save_pretrained(
-                os.path.join(args.output_dir, "unet"), state_dict=accelerator.get_state_dict(unet)
+                os.path.join(output_dir, "unet"), state_dict=accelerator.get_state_dict(unet)
             )
             if args.train_text_encoder:
                 unwarpped_text_encoder = accelerator.unwrap_model(text_encoder)
                 unwarpped_text_encoder.save_pretrained(
-                    os.path.join(args.output_dir, "text_encoder"),
+                    os.path.join(output_dir, "text_encoder"),
                     state_dict=accelerator.get_state_dict(text_encoder),
                 )
         else:
@@ -1253,7 +1320,7 @@ def main(args):
                 text_encoder=accelerator.unwrap_model(text_encoder),
                 revision=args.revision,
             )
-            pipeline.save_pretrained(args.output_dir)
+            pipeline.save_pretrained(output_dir)
 
         if args.push_to_hub:
             api.upload_folder(
