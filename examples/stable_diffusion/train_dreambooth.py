@@ -1,10 +1,12 @@
 import argparse
 import gc
+import glob
 import hashlib
 import itertools
 import logging
 import math
 import os
+import shutil
 import threading
 import warnings
 from pathlib import Path
@@ -1083,6 +1085,7 @@ def main(args):
     progress_bar.set_description("Steps")
 
     for epoch in range(first_epoch, args.num_train_epochs):
+        print(f"\nEpoch {epoch + 1}/{args.num_train_epochs}")
         unet.train()
         if args.train_text_encoder:
             text_encoder.train()
@@ -1181,6 +1184,13 @@ def main(args):
                     if current_loss < best_loss - save_threshold:
                         best_loss = current_loss
                         if accelerator.is_main_process:
+                            # Remove old best model if it exists
+                            old_best_model_path = glob.glob(os.path.join(args.output_dir, "best-model-step-*"))
+                            if old_best_model_path:
+                                old_best_model_path = old_best_model_path[0]
+                                logger.info(f"Removing old best model at {old_best_model_path}")
+                                shutil.rmtree(old_best_model_path)
+                            # Save the best model
                             best_model_path = os.path.join(args.output_dir, f"best-model-step-{global_step}")
                             if args.adapter != "full":
                                 unwarpped_unet = accelerator.unwrap_model(unet)
