@@ -1311,7 +1311,7 @@ def main(args):
     # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        output_dir = os.path.join(args.output_dir, "final_model")
+        output_dir = os.path.join(args.output_dir, "final-model")
         if args.adapter != "full":
             unwarpped_unet = accelerator.unwrap_model(unet)
             unwarpped_unet.save_pretrained(
