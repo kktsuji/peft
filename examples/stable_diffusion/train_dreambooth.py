@@ -445,6 +445,18 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
     )
+    parser.add_argument(
+        "--black_background_blend_weight",
+        type=float,
+        default=0.0,
+        help="Weight for black background blend loss to prevent color shift in backgrounds. Set to 0.0 to disable.",
+    )
+    parser.add_argument(
+        "--black_background_margin",
+        type=int,
+        default=None,
+        help="Margin around center to define black background region. If None, uses 1/4 of the minimum dimension.",
+    )
 
     # Adapter arguments
     subparsers = parser.add_subparsers(dest="adapter")
@@ -1131,6 +1143,30 @@ def main(args):
                     else:
                         raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
+                    if args.black_background_blend_weight > 0.0:
+                        # Create black images with same dimensions as input
+                        black_images = torch.zeros_like(batch["pixel_values"]).to(dtype=weight_dtype)
+                        # Encode black images to latent space using VAE
+                        bb_latents = vae.encode(black_images).latent_dist.sample()  # bb: black background
+                        bb_latents *= 0.18215
+                        bb_noisy_latents = noise_scheduler.add_noise(bb_latents, noise, timesteps)
+                        bb_model_pred = unet(bb_noisy_latents, timesteps, encoder_hidden_states).sample
+
+                        # Focus on preserving background in the UNet's prediction
+                        h, w = latents.shape[-2:]
+                        center_h, center_w = h // 2, w // 2
+                        margin = (
+                            args.black_background_margin
+                            if args.black_background_margin is not None
+                            else min(h, w) // 4
+                        )
+
+                        # Create background mask (everything except center region)
+                        background_mask = torch.ones_like(latents[:, :1, :, :])  # Use only one channel for mask
+                        background_mask[
+                            :, :, center_h - margin : center_h + margin, center_w - margin : center_w + margin
+                        ] = 0
+
                     if args.with_prior_preservation:
                         # Chunk the noise and model_pred into two parts and compute the loss on each part separately.
                         model_pred, model_pred_prior = torch.chunk(model_pred, 2, dim=0)
@@ -1146,6 +1182,14 @@ def main(args):
                         loss = loss + args.prior_loss_weight * prior_loss
                     else:
                         loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+
+                        if args.black_background_blend_weight > 0.0:
+                            loss_bb = F.mse_loss(
+                                (bb_model_pred * background_mask).float(),
+                                (target * background_mask).float(),
+                                reduction="mean",
+                            )
+                            loss += args.black_background_blend_weight * loss_bb
 
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
