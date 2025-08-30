@@ -445,6 +445,18 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
     )
+    parser.add_argument(
+        "--background_preservation_weight",
+        type=float,
+        default=0.0,
+        help="Weight for background preservation loss to prevent color shift in backgrounds. Set to 0.0 to disable.",
+    )
+    parser.add_argument(
+        "--background_margin",
+        type=int,
+        default=None,
+        help="Margin around center to define background region. If None, uses 1/4 of the minimum dimension.",
+    )
 
     # Adapter arguments
     subparsers = parser.add_subparsers(dest="adapter")
@@ -1131,21 +1143,80 @@ def main(args):
                     else:
                         raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                    if args.with_prior_preservation:
-                        # Chunk the noise and model_pred into two parts and compute the loss on each part separately.
-                        model_pred, model_pred_prior = torch.chunk(model_pred, 2, dim=0)
-                        target, target_prior = torch.chunk(target, 2, dim=0)
+                    # Add background preservation loss to prevent reddish backgrounds
+                    if args.background_preservation_weight > 0.0:
+                        # Focus on preserving background in the UNet's prediction
+                        h, w = latents.shape[-2:]
+                        center_h, center_w = h // 2, w // 2
+                        margin = args.background_margin if args.background_margin is not None else min(h, w) // 4
 
-                        # Compute instance loss
-                        loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                        # Create background mask (everything except center region)
+                        background_mask = torch.ones_like(latents[:, :1, :, :])  # Use only one channel for mask
+                        background_mask[
+                            :, :, center_h - margin : center_h + margin, center_w - margin : center_w + margin
+                        ] = 0
 
-                        # Compute prior loss
-                        prior_loss = F.mse_loss(model_pred_prior.float(), target_prior.float(), reduction="mean")
+                        # Create foreground mask (center region only)
+                        foreground_mask = 1.0 - background_mask
 
-                        # Add the prior loss to the instance loss.
-                        loss = loss + args.prior_loss_weight * prior_loss
+                        # Apply background/foreground preservation to the UNet's prediction vs target
+                        if args.with_prior_preservation:
+                            # For prior preservation, work with instance predictions only
+                            instance_model_pred, _ = torch.chunk(model_pred, 2, dim=0)
+                            instance_target, _ = torch.chunk(target, 2, dim=0)
+                            instance_background_mask = background_mask[: instance_model_pred.shape[0]]
+                            instance_foreground_mask = foreground_mask[: instance_model_pred.shape[0]]
+
+                            # Background loss (preserve black background)
+                            background_loss = F.mse_loss(
+                                (instance_model_pred * instance_background_mask).float(),
+                                (instance_target * instance_background_mask).float(),
+                                reduction="mean",
+                            )
+
+                            # Foreground loss (allow learning of red circle)
+                            foreground_loss = F.mse_loss(
+                                (instance_model_pred * instance_foreground_mask).float(),
+                                (instance_target * instance_foreground_mask).float(),
+                                reduction="mean",
+                            )
+                        else:
+                            # Background loss (preserve black background)
+                            background_loss = F.mse_loss(
+                                (model_pred * background_mask).float(),
+                                (target * background_mask).float(),
+                                reduction="mean",
+                            )
+
+                            # Foreground loss (allow learning of red circle)
+                            foreground_loss = F.mse_loss(
+                                (model_pred * foreground_mask).float(),
+                                (target * foreground_mask).float(),
+                                reduction="mean",
+                            )
+
+                        # Alpha blend between foreground and background losses (no double counting)
+                        loss = (
+                            1 - args.background_preservation_weight
+                        ) * foreground_loss + args.background_preservation_weight * background_loss
+
                     else:
-                        loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                        # Original implementation
+                        if args.with_prior_preservation:
+                            # Chunk the noise and model_pred into two parts and compute the loss on each part separately.
+                            model_pred, model_pred_prior = torch.chunk(model_pred, 2, dim=0)
+                            target, target_prior = torch.chunk(target, 2, dim=0)
+
+                            # Compute instance loss
+                            loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+
+                            # Compute prior loss
+                            prior_loss = F.mse_loss(model_pred_prior.float(), target_prior.float(), reduction="mean")
+
+                            # Add the prior loss to the instance loss.
+                            loss = loss + args.prior_loss_weight * prior_loss
+                        else:
+                            loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
