@@ -1144,11 +1144,19 @@ def main(args):
                         raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
                     if args.black_background_blend_weight > 0.0:
-                        # Create black images with same dimensions as input
-                        black_images = torch.zeros_like(batch["pixel_values"]).to(dtype=weight_dtype)
-                        # Encode black images to latent space using VAE
-                        bb_latents = vae.encode(black_images).latent_dist.sample()  # bb: black background
-                        bb_latents *= 0.18215
+                        # Create single black image template and expand to batch size for memory efficiency
+                        single_black_image = torch.zeros(
+                            1,
+                            *batch["pixel_values"].shape[1:],
+                            device=batch["pixel_values"].device,
+                            dtype=weight_dtype,
+                        )
+                        # Encode single black image to latent space using VAE
+                        single_bb_latents = vae.encode(single_black_image).latent_dist.sample()  # bb: black background
+                        single_bb_latents *= 0.18215
+
+                        # Expand to match batch size
+                        bb_latents = single_bb_latents.expand(latents.shape[0], -1, -1, -1)
                         bb_noisy_latents = noise_scheduler.add_noise(bb_latents, noise, timesteps)
                         bb_model_pred = unet(bb_noisy_latents, timesteps, encoder_hidden_states).sample
 
@@ -1161,8 +1169,8 @@ def main(args):
                             else min(h, w) // 4
                         )
 
-                        # Create background mask (everything except center region)
-                        background_mask = torch.ones_like(latents[:, :1, :, :])  # Use only one channel for mask
+                        # Create background mask (everything except center region) - single channel for memory efficiency
+                        background_mask = torch.ones(1, 1, h, w, device=latents.device, dtype=latents.dtype)
                         background_mask[
                             :, :, center_h - margin : center_h + margin, center_w - margin : center_w + margin
                         ] = 0
@@ -1184,9 +1192,11 @@ def main(args):
                         loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                         if args.black_background_blend_weight > 0.0:
+                            # Expand mask to match all channels for proper broadcasting
+                            expanded_mask = background_mask.expand_as(target)
                             loss_bb = F.mse_loss(
-                                (bb_model_pred * background_mask).float(),
-                                (target * background_mask).float(),
+                                (bb_model_pred * expanded_mask).float(),
+                                (target * expanded_mask).float(),
                                 reduction="mean",
                             )
                             loss += args.black_background_blend_weight * loss_bb
