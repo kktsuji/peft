@@ -1189,8 +1189,6 @@ def main(args):
                         # Add the prior loss to the instance loss.
                         loss = loss + args.prior_loss_weight * prior_loss
                     else:
-                        loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-
                         if args.black_background_blend_weight > 0.0:
                             # Expand mask to match all channels for proper broadcasting
                             expanded_mask = background_mask.expand_as(target)
@@ -1199,7 +1197,22 @@ def main(args):
                                 (target * expanded_mask).float(),
                                 reduction="mean",
                             )
-                            loss += args.black_background_blend_weight * loss_bb
+                            loss = args.black_background_blend_weight * loss_bb
+
+                            expanded_mask = background_mask.expand_as(target)
+
+                            # change 0 to 1, 1 to 0
+                            expanded_mask[expanded_mask == 0] = -1
+                            expanded_mask[expanded_mask == 1] = 0
+                            expanded_mask[expanded_mask == -1] = 1
+
+                            loss += F.mse_loss(
+                                (model_pred * expanded_mask).float(),
+                                (target * expanded_mask).float(),
+                                reduction="mean",
+                            )
+                        else:
+                            loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
