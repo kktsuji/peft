@@ -1097,7 +1097,7 @@ def main(args):
     progress_bar.set_description("Steps")
 
     for epoch in range(first_epoch, args.num_train_epochs):
-        print(f"\nEpoch {epoch + 1}/{args.num_train_epochs}")
+        # print(f"\nEpoch {epoch + 1}/{args.num_train_epochs}")
         unet.train()
         if args.train_text_encoder:
             text_encoder.train()
@@ -1321,19 +1321,19 @@ def main(args):
                 if global_step >= args.max_train_steps:
                     break
         # Printing the GPU memory usage details such as allocated memory, peak memory, and total memory usage
-        accelerator.print(f"GPU Memory before entering the train : {b2mb(tracemalloc.begin)}")
-        accelerator.print(f"GPU Memory consumed at the end of the train (end-begin): {tracemalloc.used}")
-        accelerator.print(f"GPU Peak Memory consumed during the train (max-begin): {tracemalloc.peaked}")
-        accelerator.print(
-            f"GPU Total Peak Memory consumed during the train (max): {tracemalloc.peaked + b2mb(tracemalloc.begin)}"
-        )
+        # accelerator.print(f"GPU Memory before entering the train : {b2mb(tracemalloc.begin)}")
+        # accelerator.print(f"GPU Memory consumed at the end of the train (end-begin): {tracemalloc.used}")
+        # accelerator.print(f"GPU Peak Memory consumed during the train (max-begin): {tracemalloc.peaked}")
+        # accelerator.print(
+        #     f"GPU Total Peak Memory consumed during the train (max): {tracemalloc.peaked + b2mb(tracemalloc.begin)}"
+        # )
 
-        accelerator.print(f"CPU Memory before entering the train : {b2mb(tracemalloc.cpu_begin)}")
-        accelerator.print(f"CPU Memory consumed at the end of the train (end-begin): {tracemalloc.cpu_used}")
-        accelerator.print(f"CPU Peak Memory consumed during the train (max-begin): {tracemalloc.cpu_peaked}")
-        accelerator.print(
-            f"CPU Total Peak Memory consumed during the train (max): {tracemalloc.cpu_peaked + b2mb(tracemalloc.cpu_begin)}"
-        )
+        # accelerator.print(f"CPU Memory before entering the train : {b2mb(tracemalloc.cpu_begin)}")
+        # accelerator.print(f"CPU Memory consumed at the end of the train (end-begin): {tracemalloc.cpu_used}")
+        # accelerator.print(f"CPU Peak Memory consumed during the train (max-begin): {tracemalloc.cpu_peaked}")
+        # accelerator.print(
+        #     f"CPU Total Peak Memory consumed during the train (max): {tracemalloc.cpu_peaked + b2mb(tracemalloc.cpu_begin)}"
+        # )
 
         # Save model at the end of each epoch (if enabled)
         if args.save_every_n_epochs is not None and (epoch + 1) % args.save_every_n_epochs == 0:
