@@ -1145,9 +1145,9 @@ def main(args):
 
                     if args.black_background_blend_weight > 0.0:
                         # Create single black image template and expand to batch size for memory efficiency
-                        single_black_image = torch.zeros(
-                            1,
-                            *batch["pixel_values"].shape[1:],
+                        single_black_image = torch.full(
+                            (1, *batch["pixel_values"].shape[1:]),
+                            -1.0,  # Black value "0" in RGB image will be transformed to "-1" in tensor.
                             device=batch["pixel_values"].device,
                             dtype=weight_dtype,
                         )
