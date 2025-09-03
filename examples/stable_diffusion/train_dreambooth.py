@@ -1190,27 +1190,19 @@ def main(args):
                         loss = loss + args.prior_loss_weight * prior_loss
                     else:
                         if args.black_background_blend_weight > 0.0:
-                            # Expand mask to match all channels for proper broadcasting
-                            expanded_mask = background_mask.expand_as(target)
-                            loss_bb = F.mse_loss(
-                                (bb_model_pred * expanded_mask).float(),
-                                (target * expanded_mask).float(),
-                                reduction="mean",
-                            )
-                            loss = args.black_background_blend_weight * loss_bb
+                            # Calculate background loss using broadcasting
+                            masked_bb_pred = bb_model_pred * background_mask  # Broadcasting: [batch, channels, h, w]
+                            masked_target = target * background_mask  # Broadcasting: [batch, channels, h, w]
+                            loss_bb = F.mse_loss(masked_bb_pred.float(), masked_target.float(), reduction="mean")
+                            loss_bb = args.black_background_blend_weight * loss_bb
 
-                            expanded_mask = background_mask.expand_as(target)
-
-                            # change 0 to 1, 1 to 0
-                            expanded_mask[expanded_mask == 0] = -1
-                            expanded_mask[expanded_mask == 1] = 0
-                            expanded_mask[expanded_mask == -1] = 1
-
-                            loss += F.mse_loss(
-                                (model_pred * expanded_mask).float(),
-                                (target * expanded_mask).float(),
-                                reduction="mean",
-                            )
+                            # Calculate foreground loss (invert mask: 0->1, 1->0)
+                            foreground_mask = 1.0 - background_mask  # [1, 1, h, w]
+                            masked_pred = model_pred * foreground_mask  # Broadcasting: [batch, channels, h, w]
+                            masked_target_fg = target * foreground_mask  # Broadcasting: [batch, channels, h, w]
+                            loss_fg = F.mse_loss(masked_pred.float(), masked_target_fg.float(), reduction="mean")
+                            loss_fg *= 1 - args.black_background_blend_weight
+                            loss = loss_fg + loss_bb
                         else:
                             loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
