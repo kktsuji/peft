@@ -1199,7 +1199,10 @@ def main(args):
                                 (target * expanded_mask).float(),
                                 reduction="mean",
                             )
-                            loss += args.black_background_blend_weight * loss_bb
+                            lambda_reg = args.black_background_blend_weight * (
+                                1 - np.exp(-epoch / (args.num_train_epochs / 4))
+                            )
+                            loss += lambda_reg * loss_bb
 
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
