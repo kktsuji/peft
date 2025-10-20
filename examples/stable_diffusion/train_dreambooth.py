@@ -457,6 +457,13 @@ def parse_args(input_args=None):
         default=None,
         help="Margin around center to define black background region. If None, uses 1/4 of the minimum dimension.",
     )
+    parser.add_argument(
+        "--black_background_dynamic_weight_method",
+        type=str,
+        default="exponential",
+        choices=["linear", "exponential", "cosine", "power"],
+        help="Method to dynamically increase black background blend weight during training.",
+    )
 
     # Adapter arguments
     subparsers = parser.add_subparsers(dest="adapter")
@@ -781,6 +788,19 @@ class PromptDataset(Dataset):
         return example
 
 
+def _get_function_dynamic_regularization_weight_method(method: str):
+    if method == "linear":
+        return lambda step, total_steps, base_weight: base_weight * (step / total_steps)
+    elif method == "cosine":
+        return lambda step, total_steps, base_weight: base_weight / 2 * (1 - np.cos(np.pi * step / total_steps))
+    elif method == "power":
+        return lambda step, total_steps, base_weight: base_weight * ((step / total_steps) ** 2)
+    elif method == "exponential":
+        return lambda step, total_steps, base_weight: base_weight * (1 - np.exp(-step / (total_steps / 4)))
+    else:
+        raise ValueError(f"Unknown black_background_dynamic_weight_method {method}")
+
+
 def main(args):
     logging_dir = Path(args.output_dir, args.logging_dir)
 
@@ -830,6 +850,9 @@ def main(args):
     # If passed along, set the training seed now.
     if args.seed is not None:
         set_seed(args.seed)
+
+    # Get the dynamic regularization weight function
+    dynamic_weight_fn = _get_function_dynamic_regularization_weight_method(args.black_background_dynamic_weight_method)
 
     # Generate class images if prior preservation is enabled.
     if args.with_prior_preservation:
@@ -1199,9 +1222,8 @@ def main(args):
                                 (target * expanded_mask).float(),
                                 reduction="mean",
                             )
-                            # Exponential
-                            lambda_reg = args.black_background_blend_weight * (
-                                1 - np.exp(-epoch / (args.num_train_epochs / 4))
+                            lambda_reg = dynamic_weight_fn(
+                                epoch, args.num_train_epochs, args.black_background_blend_weight
                             )
                             loss += lambda_reg * loss_bb
 
