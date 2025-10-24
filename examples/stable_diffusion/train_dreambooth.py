@@ -1167,24 +1167,31 @@ def main(args):
                         raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
                     if args.black_background_blend_weight > 0.0:
-                        # Create single black image template and expand to batch size for memory efficiency
-                        single_black_image = torch.full(
-                            (1, *batch["pixel_values"].shape[1:]),
-                            -1.0,  # Black value "0" in RGB image will be transformed to "-1" in tensor.
-                            device=batch["pixel_values"].device,
-                            dtype=weight_dtype,
-                        )
-                        # Encode single black image to latent space using VAE
-                        single_bb_latents = vae.encode(single_black_image).latent_dist.sample()  # bb: black background
-                        single_bb_latents *= 0.18215
+                        # Decode predicted clean latents to pixel space for proper regularization
+                        # First, predict clean latents (x_0) from noisy latents and model prediction
+                        alpha_prod_t = noise_scheduler.alphas_cumprod[timesteps]
+                        beta_prod_t = 1 - alpha_prod_t
 
-                        # Expand to match batch size
-                        bb_latents = single_bb_latents.expand(latents.shape[0], -1, -1, -1)
-                        bb_noisy_latents = noise_scheduler.add_noise(bb_latents, noise, timesteps)
-                        bb_model_pred = unet(bb_noisy_latents, timesteps, encoder_hidden_states).sample
+                        # Predict x_0 (clean latent) from model prediction
+                        if noise_scheduler.config.prediction_type == "epsilon":
+                            pred_original_sample = (
+                                noisy_latents - beta_prod_t.sqrt().view(-1, 1, 1, 1) * model_pred
+                            ) / alpha_prod_t.sqrt().view(-1, 1, 1, 1)
+                        elif noise_scheduler.config.prediction_type == "v_prediction":
+                            pred_original_sample = (
+                                alpha_prod_t.sqrt().view(-1, 1, 1, 1) * noisy_latents
+                                - beta_prod_t.sqrt().view(-1, 1, 1, 1) * model_pred
+                            )
+                        else:
+                            raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                        # Focus on preserving background in the UNet's prediction
-                        h, w = latents.shape[-2:]
+                        # Decode to pixel space
+                        pred_original_sample = pred_original_sample / 0.18215
+                        with torch.no_grad():
+                            pred_images = vae.decode(pred_original_sample.to(dtype=weight_dtype)).sample
+
+                        # Create background mask in pixel space
+                        h, w = pred_images.shape[-2:]
                         center_h, center_w = h // 2, w // 2
                         margin = (
                             args.black_background_margin
@@ -1192,11 +1199,14 @@ def main(args):
                             else min(h, w) // 4
                         )
 
-                        # Create background mask (everything except center region) - single channel for memory efficiency
-                        background_mask = torch.ones(1, 1, h, w, device=latents.device, dtype=latents.dtype)
+                        background_mask = torch.ones(1, 1, h, w, device=pred_images.device, dtype=pred_images.dtype)
                         background_mask[
                             :, :, center_h - margin : center_h + margin, center_w - margin : center_w + margin
                         ] = 0
+                        background_mask = background_mask.expand(-1, 3, -1, -1)  # Expand to RGB channels
+
+                        # Black background in pixel space is -1 (after normalization)
+                        target_black = torch.full_like(pred_images, -1.0)
 
                     if args.with_prior_preservation:
                         # Chunk the noise and model_pred into two parts and compute the loss on each part separately.
@@ -1215,15 +1225,14 @@ def main(args):
                         loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                         if args.black_background_blend_weight > 0.0:
-                            # Expand mask to match all channels for proper broadcasting
-                            expanded_mask = background_mask.expand_as(target)
+                            # Apply mask and compute loss in pixel space
                             loss_bb = F.mse_loss(
-                                (bb_model_pred * expanded_mask).float(),
-                                (target * expanded_mask).float(),
+                                (pred_images * background_mask).float(),
+                                (target_black * background_mask).float(),
                                 reduction="mean",
                             )
                             lambda_reg = dynamic_weight_fn(
-                                epoch, args.num_train_epochs, args.black_background_blend_weight
+                                global_step, args.max_train_steps, args.black_background_blend_weight
                             )
                             loss += lambda_reg * loss_bb
 
