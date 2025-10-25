@@ -1234,7 +1234,7 @@ def main(args):
                             lambda_reg = dynamic_weight_fn(
                                 global_step, args.max_train_steps, args.black_background_blend_weight
                             )
-                            if global_step % 10 == 0:
+                            if global_step % 100 == 0:
                                 print(
                                     f"Global step: {global_step}, Total loss: {loss + lambda_reg * loss_bb:.6f}, Loss: {loss:.6f}, lambda: {lambda_reg:.6f}, bb_loss: {loss_bb:.6f}"
                                 )
