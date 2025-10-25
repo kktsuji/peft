@@ -1238,6 +1238,22 @@ def main(args):
                                 print(
                                     f"Global step: {global_step}, Total loss: {loss + lambda_reg * loss_bb:.6f}, Loss: {loss:.6f}, lambda: {lambda_reg:.6f}, bb_loss: {loss_bb:.6f}"
                                 )
+                                print(
+                                    os.path.join(
+                                        args.output_dir,
+                                        args.logging_dir,
+                                        f"val_image_step_{global_step}.png",
+                                    )
+                                )
+                            rgb_tensor = (pred_images[0].detach().cpu() + 1.0) / 2.0
+                            rgb_image = transforms.ToPILImage()(rgb_tensor.clamp(0, 1))
+                            rgb_image.save(
+                                os.path.join(
+                                    args.output_dir,
+                                    args.logging_dir,
+                                    f"val_image_step_{global_step}.png",
+                                )
+                            )
                             loss += lambda_reg * loss_bb
 
                     accelerator.backward(loss)
