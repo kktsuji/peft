@@ -1254,6 +1254,20 @@ def main(args):
                                     f"val_image_step_{global_step}.png",
                                 )
                             )
+                            print(
+                                os.path.join(
+                                    args.output_dir,
+                                    args.logging_dir,
+                                    f"val_image_step_{global_step}.png",
+                                ),
+                                os.path.exists(
+                                    os.path.join(
+                                        args.output_dir,
+                                        args.logging_dir,
+                                        f"val_image_step_{global_step}.png",
+                                    )
+                                ),
+                            )
                             loss += lambda_reg * loss_bb
 
                     accelerator.backward(loss)
